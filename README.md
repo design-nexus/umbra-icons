@@ -66,7 +66,7 @@ umbra-icons folders --reset   # take them off again
 ```
 umbra-icons install [--look tile|solid|line]   build, use the look, follow theme changes, set folder icons
 umbra-icons refresh [--palette FILE]           rebuild in the current colours
-umbra-icons look [tile|solid|line]             show or change the look
+umbra-icons look [tile|solid|line|off]         show or change the look; off stops using Umbra
 umbra-icons folders [--reset]                  icons for Games, Dropbox and other folders
 umbra-icons follow on|off                      rebuild when the Omarchy theme changes
 umbra-icons build --out DIR                    write the themes somewhere else

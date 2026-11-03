@@ -3,7 +3,7 @@
 
     umbra-icons install [--look tile|solid|line]   build, use the look, follow theme changes, set folder icons
     umbra-icons refresh [--palette FILE]           rebuild in the current colours (the theme hook runs this)
-    umbra-icons look [tile|solid|line]             show or change the look in use
+    umbra-icons look [tile|solid|line|off]         show or change the look in use; off: stop using Umbra
     umbra-icons folders [--reset]                  give home folders (Games, Dropbox…) their icons
     umbra-icons follow on|off                      rebuild when the Omarchy theme changes
     umbra-icons build --out DIR [--palette …]      write the themes somewhere else
@@ -177,7 +177,7 @@ def main():
     p.add_argument("--palette")
     p.add_argument("--quiet", action="store_true")
     p = sub.add_parser("look")
-    p.add_argument("look", nargs="?", choices=list(build.THEMES))
+    p.add_argument("look", nargs="?", choices=[*build.THEMES, "off"])
     p = sub.add_parser("folders")
     p.add_argument("--reset", action="store_true")
     p = sub.add_parser("follow")
@@ -214,7 +214,13 @@ def main():
             set_icon_theme(build.theme_dir(look))
     elif a.cmd == "look":
         if not a.look:
-            print(settings().get("look", "tile"))
+            print(settings().get("look", "off"))
+        elif a.look == "off":
+            # Another icon theme was chosen (Nyx Settings does this): keep the themes and
+            # their colours up to date, but stop putting Umbra back after theme changes.
+            s = settings()
+            s.pop("look", None)
+            save_settings(s)
         else:
             if not (ICONS / build.theme_dir(a.look)).is_dir():
                 do_build(resolve_palette(None))
