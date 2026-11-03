@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Umbra icons: build the themes in the current colours, pick a look, keep them following.
+
+    umbra-icons install [--look tile|solid|line]   build, use the look, follow theme changes, set folder icons
+    umbra-icons refresh [--palette FILE]           rebuild in the current colours (the theme hook runs this)
+    umbra-icons look [tile|solid|line]             show or change the look in use
+    umbra-icons folders [--reset]                  give home folders (Games, Dropbox…) their icons
+    umbra-icons follow on|off                      rebuild when the Omarchy theme changes
+    umbra-icons build --out DIR [--palette …]      write the themes somewhere else
+    umbra-icons remove                             go back to the icon theme used before
+    umbra-icons status
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from umbra import build, catalog, palette as pal  # noqa: E402
+
+HOME = Path.home()
+DATA = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+ICONS = DATA / "icons"
+SETTINGS = CONFIG / "umbra/settings.json"
+HOOK = CONFIG / "omarchy/hooks/theme-set.d/50-umbra-icons"
+HOOK_MARK = "# Installed by umbra-icons follow on"
+GSCHEMA = "org.gnome.desktop.interface"
+
+
+def settings():
+    try:
+        return json.loads(SETTINGS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data):
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def current_icon_theme():
+    if not shutil.which("gsettings"):
+        return None
+    r = subprocess.run(["gsettings", "get", GSCHEMA, "icon-theme"], capture_output=True, text=True)
+    return r.stdout.strip().strip("'") or None if r.returncode == 0 else None
+
+
+def set_icon_theme(name):
+    """Use `name` everywhere apps read the icon theme: GNOME settings (GTK 4, Omarchy)
+    and GTK 3's settings.ini."""
+    if shutil.which("gsettings"):
+        subprocess.run(["gsettings", "set", GSCHEMA, "icon-theme", name], check=False)
+    for version in ("gtk-3.0", "gtk-4.0"):
+        ini = CONFIG / version / "settings.ini"
+        if not ini.is_file():
+            continue
+        lines = ini.read_text().splitlines()
+        out, found = [], False
+        for line in lines:
+            if line.strip().startswith("gtk-icon-theme-name"):
+                out.append(f"gtk-icon-theme-name={name}")
+                found = True
+            else:
+                out.append(line)
+        if not found:
+            out.append(f"gtk-icon-theme-name={name}")
+        ini.write_text("\n".join(out) + "\n")
+
+
+def resolve_palette(arg):
+    if arg in ("nyx-dark", "nyx-light"):
+        return pal.resolve(source=arg)
+    if arg:
+        return pal.resolve(path=arg)
+    s = settings()
+    if s.get("palette_file") and Path(s["palette_file"]).is_file():
+        return pal.resolve(path=s["palette_file"])
+    return pal.resolve()
+
+
+def do_build(palette, out=ICONS, quiet=False):
+    counts = build.build(palette, out)
+    if not quiet:
+        names = ", ".join(f"{build.THEMES[k][1]} ({v})" for k, v in counts.items())
+        print(f"Built {names} in {palette['name']} colours → {out}")
+
+
+def use_look(look):
+    s = settings()
+    current = current_icon_theme()
+    if current and not current.startswith("Umbra") and "previous" not in s:
+        s["previous"] = current
+    s["look"] = look
+    save_settings(s)
+    set_icon_theme(build.theme_dir(look))
+
+
+def follow(on):
+    if on:
+        HOOK.parent.mkdir(parents=True, exist_ok=True)
+        exe = Path(sys.argv[0]).resolve()
+        HOOK.write_text(f"#!/bin/sh\n{HOOK_MARK}\n\"{exe}\" refresh --quiet >/dev/null 2>&1 &\n")
+        HOOK.chmod(0o755)
+    elif HOOK.is_file() and HOOK_MARK in HOOK.read_text():
+        HOOK.unlink()
+    s = settings()
+    s["follow"] = on
+    save_settings(s)
+
+
+# ---------- Home folders ----------
+
+def xdg_dirs():
+    """XDG user folders: their path → role icon."""
+    roles = {"DESKTOP": "user-desktop", "DOCUMENTS": "folder-documents", "DOWNLOAD": "folder-download",
+             "MUSIC": "folder-music", "PICTURES": "folder-pictures", "VIDEOS": "folder-videos",
+             "TEMPLATES": "folder-templates", "PUBLICSHARE": "folder-publicshare"}
+    out = {}
+    f = CONFIG / "user-dirs.dirs"
+    if f.is_file():
+        for line in f.read_text().splitlines():
+            if line.startswith("XDG_") and "=" in line:
+                key, val = line.split("=", 1)
+                role = key[4:-4]
+                path = Path(os.path.expandvars(val.strip().strip('"')))
+                if role in roles and path != HOME:
+                    out[path] = roles[role]
+    return out
+
+
+def folder_icons():
+    """Folders in the home folder Umbra has an icon for: path → icon name."""
+    found = {}
+    xdg = xdg_dirs()
+    for child in sorted(HOME.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        icon = xdg.get(child) or catalog.FOLDER_NAMES.get(child.name.lower())
+        if icon and icon not in ("folder",):
+            found[child] = icon
+    return found
+
+
+def folders(reset=False, quiet=False):
+    if not shutil.which("gio"):
+        sys.exit("umbra-icons: gio is needed to set folder icons")
+    xdg = xdg_dirs()
+    for path, icon in folder_icons().items():
+        if path in xdg:
+            continue  # file managers already know the XDG folders
+        if reset:
+            subprocess.run(["gio", "set", "-t", "unset", str(path), "metadata::custom-icon-name"], check=False)
+            if not quiet:
+                print(f"{path.name}: reset")
+        else:
+            subprocess.run(["gio", "set", str(path), "metadata::custom-icon-name", icon], check=False)
+            if not quiet:
+                print(f"{path.name}: {icon}")
+
+
+# ---------- Commands ----------
+
+def main():
+    ap = argparse.ArgumentParser(prog="umbra-icons", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("install")
+    p.add_argument("--look", choices=list(build.THEMES), default=None)
+    p.add_argument("--palette")
+    p.add_argument("--no-follow", action="store_true")
+    p = sub.add_parser("refresh")
+    p.add_argument("--palette")
+    p.add_argument("--quiet", action="store_true")
+    p = sub.add_parser("look")
+    p.add_argument("look", nargs="?", choices=list(build.THEMES))
+    p = sub.add_parser("folders")
+    p.add_argument("--reset", action="store_true")
+    p = sub.add_parser("follow")
+    p.add_argument("state", choices=["on", "off"])
+    p = sub.add_parser("build")
+    p.add_argument("--out", required=True)
+    p.add_argument("--palette")
+    sub.add_parser("remove")
+    sub.add_parser("status")
+    a = ap.parse_args()
+
+    if a.cmd == "install":
+        look = a.look or settings().get("look", "tile")
+        if a.palette:
+            s = settings()
+            s["palette_file"] = str(Path(a.palette).resolve())
+            save_settings(s)
+        do_build(resolve_palette(a.palette))
+        use_look(look)
+        if not a.no_follow:
+            follow(True)
+        if shutil.which("gio"):
+            folders(quiet=True)
+        print(f"Using {build.THEMES[look][1]}.")
+    elif a.cmd == "refresh":
+        if a.palette:
+            s = settings()
+            s["palette_file"] = str(Path(a.palette).resolve())
+            save_settings(s)
+        do_build(resolve_palette(a.palette), quiet=a.quiet)
+        look = settings().get("look")
+        # Omarchy's theme switch sets its own icon theme; put the chosen look back.
+        if look and current_icon_theme() != build.theme_dir(look):
+            set_icon_theme(build.theme_dir(look))
+    elif a.cmd == "look":
+        if not a.look:
+            print(settings().get("look", "tile"))
+        else:
+            if not (ICONS / build.theme_dir(a.look)).is_dir():
+                do_build(resolve_palette(None))
+            use_look(a.look)
+            print(f"Using {build.THEMES[a.look][1]}.")
+    elif a.cmd == "folders":
+        folders(a.reset)
+    elif a.cmd == "follow":
+        follow(a.state == "on")
+    elif a.cmd == "build":
+        do_build(resolve_palette(a.palette), Path(a.out))
+    elif a.cmd == "remove":
+        s = settings()
+        set_icon_theme(s.get("previous") or "Adwaita")
+        follow(False)
+        if shutil.which("gio"):
+            folders(reset=True, quiet=True)
+        for look in build.THEMES:
+            shutil.rmtree(ICONS / build.theme_dir(look), ignore_errors=True)
+        s.pop("look", None)
+        save_settings(s)
+        print(f"Back to {s.get('previous') or 'Adwaita'}.")
+    elif a.cmd == "status":
+        s = settings()
+        print(f"look: {s.get('look', 'not in use')}")
+        print(f"icon theme: {current_icon_theme()}")
+        print(f"following theme changes: {'yes' if HOOK.is_file() else 'no'}")
+        for look in build.THEMES:
+            info = ICONS / build.theme_dir(look) / "umbra.json"
+            if info.is_file():
+                print(f"{build.THEMES[look][1]}: built in {json.loads(info.read_text())['palette']['name']} colours")
+
+
+if __name__ == "__main__":
+    main()
