@@ -1,8 +1,12 @@
 # Umbra icons
 
-Python 3.11+, standard library only at runtime. `bin/umbra-icons` builds the themes
-(`umbra/build.py`) from the glyphs (`umbra/glyphs.py`), names (`umbra/catalog.py`) and
-looks (`umbra/looks.py`) in a palette (`umbra/palette.py`).
+Python 3.11+, standard library only at runtime. `bin/umbra-icons` (`umbra/cli.py`)
+builds the themes (`umbra/build.py`) from the glyphs (`umbra/glyphs.py`), names
+(`umbra/catalog.py`) and looks (`umbra/looks.py`) in a palette (`umbra/palette.py`).
+Looks: tile, solid, line, tinted, frame, colour.
+
+`build.Family` and `cli.IconSet` are shared with vellum-icons, which draws its own looks
+from this catalog and these glyphs: keep their signatures working for it.
 
 Commands: `python3 -m unittest discover -s tests`; `tools/sheet.py OUT.html --png` for a
 contact sheet (headless Chromium, nothing on screen); `./install.sh` installs and switches

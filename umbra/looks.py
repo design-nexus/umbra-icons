@@ -1,12 +1,14 @@
-"""The three looks: Tile (the default), Solid and Line.
+"""The looks: Tile (the default), Solid, Line, Tinted, Frame and Colour.
 
 Every icon is drawn on a 128 px canvas for a given size: small sizes drop fine detail
 and keep strokes at least a pixel and a bit wide; Line thins its strokes at large sizes.
+Tinted and Frame are Tile on another tile; Colour puts a white shape on a tile in the
+icon's colour.
 """
 from .glyphs import BRAND, G, LANG, label, text_width
-from .palette import colour, surfaces
+from .palette import colour, mix, surfaces
 
-LOOKS = ["tile", "solid", "line"]
+LOOKS = ["tile", "solid", "line", "tinted", "frame", "colour"]
 SCALABLE = 96  # what "scalable" is drawn for
 
 
@@ -33,9 +35,17 @@ def glyph(name, col, x, y, s, canvas_width):
     return placed(stroke(G[name], col, canvas_width / s), x, y, s)
 
 
-def mark(m, palette, x, y, s, canvas_width, col):
+def brand(name, on_light=False):
+    """A cloud-drive mark. GitHub's is one colour by its own rules: dark on light
+    surfaces, light on dark ones."""
+    if name == "github" and on_light:
+        return BRAND[name].replace("#e8e8ea", "#1f2328")
+    return BRAND[name]
+
+
+def mark(m, palette, x, y, s, canvas_width, col, on_light=False):
     if m.startswith("brand:"):
-        return placed(BRAND[m[6:]], x, y, s)
+        return placed(brand(m[6:], on_light), x, y, s)
     if m.startswith("lang:"):
         return placed(LANG[m[5:]][0](), x, y, s)
     return glyph(m, col, x, y, s, canvas_width)
@@ -57,21 +67,23 @@ def spec_colour(spec, palette):
 
 # ---------- Tile ----------
 
-def _tile(palette, accent, inner):
+def _tile(palette, accent, inner, size=None, top=None, bottom=None, rim=0.3):
     s = surfaces(palette)
     glow = 0.14 if palette["light"] else 0.2
-    defs = (f'<linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{s["tile_top"]}"/>'
-            f'<stop offset="1" stop-color="{s["tile_bottom"]}"/></linearGradient>'
+    defs = (f'<linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{top or s["tile_top"]}"/>'
+            f'<stop offset="1" stop-color="{bottom or s["tile_bottom"]}"/></linearGradient>'
             f'<radialGradient id="g" cx=".18" cy=".1" r=".75"><stop offset="0" stop-color="{accent}" stop-opacity="{glow}"/>'
             f'<stop offset="1" stop-color="{accent}" stop-opacity="0"/></radialGradient>')
     body = ('<rect x="8" y="8" width="112" height="112" rx="28" fill="url(#t)"/>'
             '<rect x="8" y="8" width="112" height="112" rx="28" fill="url(#g)"/>'
-            f'<rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="{accent}" stroke-opacity=".3"/>'
+            f'<rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="{accent}" stroke-opacity="{rim}"/>'
             + inner)
     return svg(body, defs)
 
 
-def tile(spec, palette, size):
+def tile(spec, palette, size, base=_tile):
+    """Tile's glyph and mark on `base(palette, accent, inner, size)`: Tile's own satin
+    tile, or Tinted's or Frame's."""
     kind, m = spec["kind"], spec.get("mark")
     col = spec_colour(spec, palette)
     small = _px(size) <= 22
@@ -79,21 +91,94 @@ def tile(spec, palette, size):
     inner_w = _w(3.8, size, 1.15)
     if kind == "folder":
         if m == "open":
-            return _tile(palette, col, glyph("folder-open", col, 22, 20, 3.5, outline))
+            return base(palette, col, glyph("folder-open", col, 22, 20, 3.5, outline), size)
         body = glyph("folder", col, 22, 20, 3.5, outline)
         if m and not small:
             body += mark(m, palette, 47 if not m.startswith("brand:") else 46, 52, 1.42, inner_w, col)
         accent = palette["accent"] if m and m.startswith("brand:") else col
-        return _tile(palette, accent, body)
+        return base(palette, accent, body, size)
     if kind == "file":
         if m.startswith("lang:") and small:
-            return _tile(palette, col, mark(m, palette, 22, 22, 3.5, inner_w, col))
+            return base(palette, col, mark(m, palette, 22, 22, 3.5, inner_w, col), size)
         body = glyph("page", col, 21, 18, 3.6, outline)
         if not small:
             body += mark(m, palette, 44, 50, 1.6, inner_w, col) if not m.startswith("lang:") else \
                 mark(m, palette, 41, 44, 1.9, inner_w, col)
-        return _tile(palette, col, body)
-    return _tile(palette, col, glyph(m, col, 28, 28, 3, _w(4.8, size, 1.3)))
+        return base(palette, col, body, size)
+    return base(palette, col, glyph(m, col, 28, 28, 3, _w(4.8, size, 1.3)), size)
+
+
+# ---------- Tinted and Frame: Tile on another tile ----------
+
+def _tinted_tile(palette, accent, inner, size):
+    """The satin tile washed with the icon's own colour."""
+    s = surfaces(palette)
+    if palette["light"]:
+        top, bottom = mix(s["tile_top"], accent, 0.1), mix(s["tile_bottom"], accent, 0.16)
+    else:
+        top, bottom = mix(s["tile_top"], accent, 0.2), mix(s["tile_bottom"], accent, 0.1)
+    return _tile(palette, accent, inner, size, top, bottom, rim=0.42)
+
+
+def _frame_tile(palette, accent, inner, size):
+    """No satin: the tile's outline in the icon's colour over a faint wash of it."""
+    return svg(f'<rect x="10" y="10" width="108" height="108" rx="27" fill="{accent}" fill-opacity=".07" '
+               f'stroke="{accent}" stroke-opacity=".6" stroke-width="{_w(3, size, 1):.2f}"/>' + inner)
+
+
+def tinted(spec, palette, size):
+    return tile(spec, palette, size, _tinted_tile)
+
+
+def frame(spec, palette, size):
+    return tile(spec, palette, size, _frame_tile)
+
+
+# ---------- Colour: a white shape on a tile in the icon's colour ----------
+
+_SHAPE = 'transform="translate(64 64) scale(.62) translate(-64 -64)"'
+_PAGE_SHAPE = 'transform="translate(64 66) scale(.6) translate(-64 -65)"'
+_SQUIRCLE = 'x="8" y="8" width="112" height="112" rx="28"'
+
+
+def _colour_tile(col, inner, size):
+    defs = (f'<linearGradient id="t" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="{mix(col, "#ffffff", 0.14)}"/>'
+            f'<stop offset="1" stop-color="{mix(col, "#000000", 0.2)}"/></linearGradient>'
+            '<radialGradient id="s" cx=".2" cy=".05" r=".8"><stop offset="0" stop-color="#ffffff" stop-opacity=".28"/>'
+            '<stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>')
+    rim = '' if _px(size) <= 22 else ('<rect x="8.75" y="8.75" width="110.5" height="110.5" rx="27.25" fill="none" '
+                                       'stroke="#ffffff" stroke-opacity=".22" stroke-width="1.5"/>')
+    return svg(f'<rect {_SQUIRCLE} fill="url(#t)"/><rect {_SQUIRCLE} fill="url(#s)"/>{rim}{inner}', defs)
+
+
+def _centred(m, palette, cx, cy, s, canvas_width, col):
+    return mark(m, palette, cx - 12 * s, cy - 12 * s, s, canvas_width, col, on_light=True)
+
+
+def colour_tile(spec, palette, size):
+    kind, m = spec["kind"], spec.get("mark")
+    small = _px(size) <= 22
+    if kind == "folder":
+        brand_mark = bool(m and m.startswith("brand:"))
+        col = palette["accent"] if brand_mark else colour(palette, spec.get("colour"))
+        front = FOLDER_FRONT_OPEN if m == "open" else FOLDER_FRONT
+        inner = (f'<g {_SHAPE}><path d="{FOLDER_BACK}" fill="#ffffff" fill-opacity=".6"/>'
+                 f'<path d="{front}" fill="#ffffff"/></g>')
+        if m and m != "open" and not small:
+            inner += _centred(m, palette, 64, 70, 1.35 if brand_mark else 1.5, _w(4.2, size, 1.1),
+                              mix(col, "#000000", 0.08))
+        return _colour_tile(col, inner, size)
+    col = spec_colour(spec, palette)
+    if kind == "file":
+        lang = m.startswith("lang:")
+        if lang and small:
+            return svg(f'<rect {_SQUIRCLE} fill="#ffffff"/>' + placed(LANG[m[5:]][0](), 16, 16, 4))
+        inner = (f'<g {_PAGE_SHAPE}><path d="{PAGE}" fill="#ffffff"/>'
+                 f'<path d="{FOLD}" fill="{mix(col, "#ffffff", 0.45)}"/></g>')
+        if not small:
+            inner += _centred(m, palette, 64, 72, 1.6 if lang else 1.7, _w(4.2, size, 1.1), mix(col, "#000000", 0.08))
+        return _colour_tile(col, inner, size)
+    return _colour_tile(col, _centred(m, palette, 64, 64, 2.9, _w(5, size, 1.3), "#ffffff"), size)
 
 
 # ---------- Solid ----------
@@ -197,7 +282,7 @@ def line(spec, palette, size):
     return svg(glyph(m, col, 4, 4, k, w))
 
 
-RENDER = {"tile": tile, "solid": solid, "line": line}
+RENDER = {"tile": tile, "solid": solid, "line": line, "tinted": tinted, "frame": frame, "colour": colour_tile}
 
 
 def render(look, spec, palette, size):

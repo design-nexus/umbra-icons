@@ -60,11 +60,29 @@ class Render(unittest.TestCase):
             self.assertIn(icon, drawn)
 
 
+    def test_tinted_washes_the_tile_in_the_icons_colour(self):
+        spec = {"kind": "folder", "mark": "pictures", "colour": "green"}
+        stops = lambda look: re.findall(r'id="t".*?stop-color="(#\w+)"', looks.render(look, spec, palette.NYX_DARK, 48))
+        self.assertNotEqual(stops("tinted"), stops("tile"))
+        self.assertIn(palette.NYX_DARK["swatches"]["green"], looks.render("tinted", spec, palette.NYX_DARK, 48))
+
+    def test_frame_has_no_satin(self):
+        spec = {"kind": "device", "mark": "laptop", "colour": "blue"}
+        svg = looks.render("frame", spec, palette.NYX_DARK, "scalable")
+        self.assertNotIn("linearGradient", svg)
+        self.assertIn(f'stroke="{palette.NYX_DARK["swatches"]["blue"]}"', svg)
+
+    def test_colour_puts_github_dark_on_its_white_folder(self):
+        spec = {"kind": "folder", "mark": "brand:github", "colour": None}
+        self.assertIn("#1f2328", looks.render("colour", spec, palette.NYX_DARK, "scalable"))
+        self.assertNotIn("#1f2328", looks.render("tile", spec, palette.NYX_DARK, "scalable"))
+
+
 class Theme(unittest.TestCase):
-    def test_build_writes_three_themes(self):
+    def test_build_writes_every_look(self):
         with tempfile.TemporaryDirectory() as out:
             counts = build.build(palette.NYX_DARK, out)
-            self.assertEqual(set(counts), {"tile", "solid", "line"})
+            self.assertEqual(list(counts), looks.LOOKS)
             for look, (directory, name) in build.THEMES.items():
                 index = (Path(out) / directory / "index.theme").read_text()
                 self.assertIn(f"Name={name}", index)
@@ -73,7 +91,27 @@ class Theme(unittest.TestCase):
             self.assertTrue((Path(out) / "Umbra/scalable/places/folder-games.svg").is_file())
             self.assertTrue((Path(out) / "Umbra-Line/16x16/mimetypes/text-rust.svg").is_file())
             self.assertTrue((Path(out) / "Umbra/symbolic/actions/edit-copy-symbolic.svg").is_file())
-            self.assertIn("Inherits=Umbra,", (Path(out) / "Umbra-Solid/index.theme").read_text())
+            for look in looks.LOOKS[1:]:
+                self.assertIn("Inherits=Umbra,", (Path(out) / build.theme_dir(look) / "index.theme").read_text())
+                self.assertTrue((Path(out) / build.theme_dir(look) / "umbra.json").is_file())
+            self.assertTrue((Path(out) / "Umbra-Colour/scalable/places/folder-dropbox.svg").is_file())
+
+    def test_another_family_builds_from_the_same_catalog(self):
+        fam = build.Family("other", {"a": ("Other", "Other"), "b": ("Other-B", "Other B")},
+                           lambda look, spec, p, size: looks.render("line", spec, p, size), "Test", "a")
+        with tempfile.TemporaryDirectory() as out:
+            build.build(palette.NYX_DARK, out, family=fam)
+            self.assertTrue((Path(out) / "Other/symbolic/actions/edit-copy-symbolic.svg").is_file())
+            self.assertFalse((Path(out) / "Other-B/symbolic").exists())
+            self.assertIn("Inherits=Other,Adwaita", (Path(out) / "Other-B/index.theme").read_text())
+            self.assertTrue((Path(out) / "Other-B/other.json").is_file())
+
+
+class Command(unittest.TestCase):
+    def test_umbra_owns_its_looks_only(self):
+        from umbra import cli
+        self.assertTrue(all(cli.UMBRA.owns(build.theme_dir(look)) for look in looks.LOOKS))
+        self.assertFalse(cli.UMBRA.owns("Vellum") or cli.UMBRA.owns("Yaru"))
 
 
 class Symbolic(unittest.TestCase):

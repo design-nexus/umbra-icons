@@ -1,13 +1,18 @@
-"""Write the Umbra icon themes.
+"""Write the Umbra icon themes, or another family's drawn from the same catalog.
 
-Umbra is the Tile look and holds the symbolic set; Umbra Solid and Umbra Line inherit
-it for symbolic icons. Anything Umbra doesn't draw falls back to Adwaita, then hicolor.
+Umbra is the Tile look and holds the symbolic set; the other looks inherit it for
+symbolic icons. Anything Umbra doesn't draw falls back to Adwaita, then hicolor.
+
+A family (Umbra, or Vellum from vellum-icons) is its looks' theme folders and names,
+a renderer, and the look that carries the symbolic set.
 """
 import json
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from . import catalog, looks
 
@@ -18,6 +23,9 @@ THEMES = {
     "tile": ("Umbra", "Umbra"),
     "solid": ("Umbra-Solid", "Umbra Solid"),
     "line": ("Umbra-Line", "Umbra Line"),
+    "tinted": ("Umbra-Tinted", "Umbra Tinted"),
+    "frame": ("Umbra-Frame", "Umbra Frame"),
+    "colour": ("Umbra-Colour", "Umbra Colour"),
 }
 FIXED = [16, 22, 24, 32, 48]
 CONTEXTS = {"places": "Places", "mimetypes": "MimeTypes", "devices": "Devices", "status": "Status", "apps": "Applications"}
@@ -26,11 +34,26 @@ SYMBOLIC_CONTEXTS = {"actions": "Actions", "places": "Places", "mimetypes": "Mim
 COMMENT = "Satin icons for Nyx and Omarchy, in the colours of the current theme"
 
 
+@dataclass(frozen=True)
+class Family:
+    id: str  # also the name of the stamp file each theme folder gets: <id>.json
+    themes: dict  # look -> (theme folder, display name)
+    render: Callable  # (look, spec, palette, size) -> SVG
+    comment: str
+    symbolic_look: str  # the look whose theme holds the symbolic set
+
+    def theme_dir(self, look):
+        return self.themes[look][0]
+
+
+UMBRA = Family("umbra", THEMES, looks.render, COMMENT, "tile")
+
+
 def theme_dir(look):
     return THEMES[look][0]
 
 
-def _index(look, has_symbolic):
+def _index(family, look, has_symbolic):
     dirs, sections = [], []
     for size in FIXED:
         for ctx, name in CONTEXTS.items():
@@ -46,9 +69,10 @@ def _index(look, has_symbolic):
             d = f"symbolic/{ctx}"
             dirs.append(d)
             sections.append(f"[{d}]\nSize=16\nMinSize=8\nMaxSize=512\nContext={name}\nType=Scalable\n")
-    inherits = "Adwaita,hicolor" if look == "tile" else "Umbra,Adwaita,hicolor"
-    head = (f"[Icon Theme]\nName={THEMES[look][1]}\nComment={COMMENT}\nInherits={inherits}\nExample=folder\n"
-            f"Directories={','.join(dirs)}\n")
+    holder = family.theme_dir(family.symbolic_look)
+    inherits = "Adwaita,hicolor" if look == family.symbolic_look else f"{holder},Adwaita,hicolor"
+    head = (f"[Icon Theme]\nName={family.themes[look][1]}\nComment={family.comment}\nInherits={inherits}\n"
+            f"Example=folder\nDirectories={','.join(dirs)}\n")
     return head + "\n" + "\n".join(sections)
 
 
@@ -66,9 +90,9 @@ def _link(path, target):
     path.symlink_to(target)
 
 
-def build_look(look, palette, out):
+def build_look(look, palette, out, family=UMBRA):
     """Write one look's theme under `out`; returns the number of icon names."""
-    base = Path(out) / theme_dir(look)
+    base = Path(out) / family.theme_dir(look)
     tmp = base.with_name(base.name + ".building")
     if tmp.exists():
         shutil.rmtree(tmp)
@@ -78,11 +102,11 @@ def build_look(look, palette, out):
         for size in FIXED + ["scalable"]:
             d = tmp / ("scalable" if size == "scalable" else f"{size}x{size}") / context
             first = d / f"{names[0]}.svg"
-            _write(first, looks.render(look, spec, palette, size))
+            _write(first, family.render(look, spec, palette, size))
             for alias in names[1:]:
                 _link(d / f"{alias}.svg", first.name)
         count += len(names)
-    has_symbolic = look == "tile" and SYMBOLIC.is_dir()
+    has_symbolic = look == family.symbolic_look and SYMBOLIC.is_dir()
     if has_symbolic:
         for src in SYMBOLIC.rglob("*.svg"):
             dest = tmp / "symbolic" / src.relative_to(SYMBOLIC)
@@ -92,8 +116,8 @@ def build_look(look, palette, out):
             else:
                 shutil.copyfile(src, dest)
             count += 1
-    _write(tmp / "index.theme", _index(look, has_symbolic))
-    _write(tmp / "umbra.json", json.dumps({"look": look, "palette": palette}, indent=2) + "\n")
+    _write(tmp / "index.theme", _index(family, look, has_symbolic))
+    _write(tmp / f"{family.id}.json", json.dumps({"look": look, "palette": palette}, indent=2) + "\n")
     # Swap in whole, so an app never reads a half-written theme.
     old = base.with_name(base.name + ".old")
     if old.exists():
@@ -113,5 +137,5 @@ def cache(theme):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def build(palette, out, which=None):
-    return {look: build_look(look, palette, out) for look in (which or looks.LOOKS)}
+def build(palette, out, which=None, family=UMBRA):
+    return {look: build_look(look, palette, out, family) for look in (which or family.themes)}
