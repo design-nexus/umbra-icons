@@ -6,6 +6,8 @@ symbolic icons for toolbars and menus.
 
 ## Install
 
+On NyxOS, Umbra comes with the system, in Nyx Dark's colours. On Omarchy:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/design-nexus/umbra-icons/main/install.sh | bash
 ```
